@@ -78,6 +78,8 @@
     var haloSprite = makeHaloSprite();
     var vignette = null;
     var visible = true;
+    var running = false;
+    var rafId = 0;
     var intro = REDUCED ? 1 : 0;
     var t0 = performance.now();
     var last = t0;
@@ -85,6 +87,12 @@
     var smooth = { x: 0.5, y: 0.5 };
     var offset = { x: 0, y: 0 };
     var velocity = { x: 0, y: 0 };
+    var cursor = { x: 0, y: 0, tx: 0, ty: 0, vx: 0, vy: 0, lastX: 0, lastY: 0, lastAt: 0, active: false };
+    var influenceRadius = 240;
+    var starPalette = [
+      "244,247,255", "225,234,255", "198,217,255",
+      "217,211,255", "235,232,255", "250,250,252"
+    ];
 
     function rnd(a, b) { return a + Math.random() * (b - a); }
     function clamp01(v) { return Math.max(0, Math.min(1, v)); }
@@ -163,7 +171,7 @@
           data[i] = rr;
           data[i + 1] = gg;
           data[i + 2] = bb;
-          data[i + 3] = Math.round(Math.min(1, n * 0.72) * 255);
+          data[i + 3] = Math.round(Math.min(1, n * 0.92) * 255);
         }
       }
       g.putImageData(img, 0, 0);
@@ -196,44 +204,48 @@
           y = Math.random() * H;
         }
       }
-      return { x: x, y: y };
+      return { x: x, y: y, bx: x, by: y, vx: 0, vy: 0, color: starPalette[Math.floor(Math.random() * starPalette.length)] };
     }
 
     function buildStars() {
       stars.back = []; stars.dust = []; stars.mid = []; stars.bright = [];
       var area = W * H;
-      var backN = Math.min(MOBILE ? 340 : 920, Math.round(area / (MOBILE ? 2700 : 1500)));
-      var dustN = Math.min(MOBILE ? 90 : 230, Math.round(area / (MOBILE ? 9800 : 5800)));
-      var midN = Math.min(MOBILE ? 34 : 90, Math.round(area / (MOBILE ? 27000 : 14500)));
-      var brightN = Math.min(MOBILE ? 7 : 18, Math.round(area / (MOBILE ? 95000 : 76000)));
+      var total = MOBILE
+        ? Math.min(760, Math.max(620, Math.round(area / 650)))
+        : Math.min(1500, Math.max(1100, Math.round(area / 900)));
+      var backN = Math.round(total * 0.25);
+      var dustN = Math.round(total * 0.30);
+      var midN = Math.round(total * 0.40);
+      var brightN = total - backN - dustN - midN;
       var i, s;
       for (i = 0; i < backN; i++) {
         s = randomStar("back", false);
-        s.r = rnd(0.32, 0.78); s.a = rnd(0.16, 0.48); s.tw = rnd(0.22, 0.75); s.ph = rnd(0, 6.28);
+        s.r = rnd(0.34, 0.72); s.a = rnd(0.28, 0.58); s.tw = rnd(0.18, 0.62); s.ph = rnd(0, 6.28); s.depth = 0.10;
         stars.back.push(s);
       }
       for (i = 0; i < dustN; i++) {
         s = randomStar("dust", false);
-        s.r = rnd(0.52, 1.05); s.a = rnd(0.24, 0.58); s.tw = rnd(0.25, 0.9); s.ph = rnd(0, 6.28);
+        s.r = rnd(0.48, 0.94); s.a = rnd(0.40, 0.72); s.tw = rnd(0.24, 0.82); s.ph = rnd(0, 6.28); s.depth = 0.38;
         stars.dust.push(s);
       }
       for (i = 0; i < midN; i++) {
         s = randomStar("mid", false);
-        s.r = rnd(0.78, 1.35); s.a = rnd(0.34, 0.68); s.tw = rnd(0.3, 1.05); s.ph = rnd(0, 6.28);
+        s.r = rnd(0.62, 1.24); s.a = rnd(0.58, 0.94); s.tw = rnd(0.3, 1.05); s.ph = rnd(0, 6.28); s.depth = 0.68;
         stars.mid.push(s);
       }
       for (i = 0; i < brightN; i++) {
         s = randomStar("bright", true);
-        s.r = rnd(1.15, 1.9); s.a = rnd(0.58, 0.92); s.tw = rnd(0.35, 0.9); s.ph = rnd(0, 6.28); s.halo = rnd(9, 18);
+        s.r = rnd(0.9, 1.7); s.a = rnd(0.76, 1); s.tw = rnd(0.35, 0.9); s.ph = rnd(0, 6.28); s.halo = rnd(8, 17); s.depth = 1;
         stars.bright.push(s);
       }
       filaments = [];
       var nf = MOBILE ? 2 : 4;
       for (i = 0; i < nf; i++) {
+        var filamentDirection = Math.random() < 0.5 ? rnd(-0.78, -0.34) : rnd(0.34, 0.78);
         filaments.push({
           x: rnd(-0.12, 0.9), y: rnd(0.08, 0.88),
-          len: rnd(0.22, 0.46), ang: rnd(-0.28, 0.18),
-          a: rnd(0.025, 0.065), ph: rnd(0, 6.28), sp: rnd(0.006, 0.014)
+          len: rnd(0.12, 0.24), ang: filamentDirection,
+          a: rnd(0.018, 0.045), ph: rnd(0, 6.28), sp: rnd(0.006, 0.014)
         });
       }
     }
@@ -241,6 +253,9 @@
     function resize() {
       W = canvas.clientWidth;
       H = canvas.clientHeight;
+      influenceRadius = Math.min(310, Math.max(185, W * 0.17));
+      cursor.x = cursor.tx = cursor.lastX = W * 0.5;
+      cursor.y = cursor.ty = cursor.lastY = H * 0.5;
       renderDpr = Math.min(DPR, MOBILE ? 1.15 : 1.5);
       canvas.width = Math.max(1, Math.round(W * renderDpr));
       canvas.height = Math.max(1, Math.round(H * renderDpr));
@@ -265,8 +280,8 @@
       nebulaCtx.imageSmoothingEnabled = true;
       nebulaCtx.imageSmoothingQuality = "high";
 
-      var driftX = REDUCED ? 0 : Math.sin(t * 0.035) * 5 + offset.x * -8;
-      var driftY = REDUCED ? 0 : Math.cos(t * 0.028) * 4 + offset.y * -6;
+      var driftX = REDUCED ? 0 : Math.sin(t * 0.035) * 6 + offset.x * -7 + cursor.vx * -0.16;
+      var driftY = REDUCED ? 0 : Math.cos(t * 0.028) * 5 + offset.y * -5 + cursor.vy * -0.16;
       var breathe = REDUCED ? 1 : 1 + Math.sin(t * 0.055) * 0.014;
 
       nebulaCtx.save();
@@ -302,16 +317,47 @@
       ctx.drawImage(nebulaLayer, 0, 0, W, H);
     }
 
-    function drawLayer(layer, ox, oy, t, introMul, safeDim) {
+    function updateLayer(layer, step) {
+      if (REDUCED) return;
+      for (var i = 0; i < layer.length; i++) {
+        var s = layer[i];
+        var dx = s.x - cursor.x;
+        var dy = s.y - cursor.y;
+        var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        if (cursor.active && dist < influenceRadius) {
+          var falloff = 1 - dist / influenceRadius;
+          var field = falloff * falloff * s.depth;
+          var speed = Math.min(30, Math.sqrt(cursor.vx * cursor.vx + cursor.vy * cursor.vy));
+          s.vx += (cursor.vx * 0.020 + (-dy / dist) * speed * 0.006) * field * step;
+          s.vy += (cursor.vy * 0.020 + ( dx / dist) * speed * 0.006) * field * step;
+        }
+        s.vx += (s.bx - s.x) * (0.0022 + s.depth * 0.0016) * step;
+        s.vy += (s.by - s.y) * (0.0022 + s.depth * 0.0016) * step;
+        var settle = Math.pow(0.925 - s.depth * 0.012, step);
+        s.vx *= settle;
+        s.vy *= settle;
+        s.x += s.vx * step;
+        s.y += s.vy * step;
+      }
+    }
+
+    function drawLayer(layer, ox, oy, t, introMul, safeDim, stretch) {
       for (var i = 0; i < layer.length; i++) {
         var s = layer[i];
         var tw = REDUCED ? 1 : 0.76 + 0.24 * Math.sin(t * s.tw + s.ph);
         var a = s.a * tw * introMul;
         if (safeDim && inSafe(s.x, s.y, 0.96)) a *= 0.35;
         if (a < 0.012) continue;
-        ctx.fillStyle = "rgba(250,250,252," + a.toFixed(3) + ")";
-        if (s.r < 0.85) ctx.fillRect(s.x + ox, s.y + oy, s.r, s.r);
-        else { ctx.beginPath(); ctx.arc(s.x + ox, s.y + oy, s.r, 0, 6.28318); ctx.fill(); }
+        ctx.fillStyle = "rgba(" + s.color + "," + a.toFixed(3) + ")";
+        var px = s.x + ox, py = s.y + oy;
+        var motion = Math.sqrt(s.vx * s.vx + s.vy * s.vy);
+        if (stretch && motion > 0.16) {
+          ctx.strokeStyle = "rgba(" + s.color + "," + (a * 0.46).toFixed(3) + ")";
+          ctx.lineWidth = Math.max(0.55, s.r * 0.7);
+          ctx.beginPath(); ctx.moveTo(px - s.vx * 2.8, py - s.vy * 2.8); ctx.lineTo(px, py); ctx.stroke();
+        }
+        if (s.r < 0.78) ctx.fillRect(px, py, s.r, s.r);
+        else { ctx.beginPath(); ctx.arc(px, py, s.r, 0, 6.28318); ctx.fill(); }
       }
     }
 
@@ -320,12 +366,13 @@
         var s = layer[i];
         var tw = REDUCED ? 1 : 0.72 + 0.28 * Math.sin(t * s.tw + s.ph);
         var a = s.a * tw * introMul;
+        if (inSafe(s.x, s.y, 1.02)) a *= 0.06;
         if (a < 0.015) continue;
         var h = s.halo * (0.82 + 0.18 * tw);
         ctx.globalAlpha = a * 0.36;
         ctx.drawImage(haloSprite, s.x + ox - h, s.y + oy - h, h * 2, h * 2);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = "rgba(250,250,252," + a.toFixed(3) + ")";
+        ctx.fillStyle = "rgba(" + s.color + "," + a.toFixed(3) + ")";
         ctx.beginPath();
         ctx.arc(s.x + ox, s.y + oy, s.r, 0, 6.28318);
         ctx.fill();
@@ -370,9 +417,9 @@
       ctx.translate(W / 2, H / 2);
       ctx.scale(breathe, breathe);
       ctx.translate(-W / 2, -H / 2);
-      drawLayer(stars.back, ox * -1.4, oy * -1.2, t, intro * fade, true);
-      drawLayer(stars.dust, ox * -7, oy * -5.5, t * 1.08, intro * fade, true);
-      drawLayer(stars.mid, ox * -3.4, oy * -2.8, t * 0.82, intro * fade, false);
+      drawLayer(stars.back, ox * -0.7, oy * -0.5, t, intro * fade, true, false);
+      drawLayer(stars.dust, ox * -1.8, oy * -1.4, t * 1.08, intro * fade, true, false);
+      drawLayer(stars.mid, ox * -2.6, oy * -2.0, t * 0.82, intro * fade, true, true);
       drawBright(stars.bright, ox * -11, oy * -9, t * 0.66, intro * fade);
       drawFilaments(t, intro * fade);
       ctx.restore();
@@ -382,7 +429,8 @@
     }
 
     function frame(now) {
-      requestAnimationFrame(frame);
+      if (!running) return;
+      rafId = requestAnimationFrame(frame);
       if (!visible || document.hidden) { last = now; return; }
       var dt = Math.min(50, now - last);
       last = now;
@@ -403,8 +451,18 @@
         var damping = Math.exp(-dt * 0.016);
         velocity.x *= damping;
         velocity.y *= damping;
-        offset.x += velocity.x * dt * 0.025;
-        offset.y += velocity.y * dt * 0.025;
+        offset.x += velocity.x * dt * 0.012;
+        offset.y += velocity.y * dt * 0.012;
+        cursor.x += (cursor.tx - cursor.x) * Math.min(1, dt * 0.012);
+        cursor.y += (cursor.ty - cursor.y) * Math.min(1, dt * 0.012);
+        cursor.vx *= Math.exp(-dt * 0.0048);
+        cursor.vy *= Math.exp(-dt * 0.0048);
+        if (now - cursor.lastAt > 1500 && Math.abs(cursor.vx) + Math.abs(cursor.vy) < 0.08) cursor.active = false;
+        var step = Math.min(2.4, dt / 16.667);
+        updateLayer(stars.back, step);
+        updateLayer(stars.dust, step);
+        updateLayer(stars.mid, step);
+        updateLayer(stars.bright, step);
       }
 
       var fade = 1;
@@ -415,28 +473,57 @@
       draw(t, fade);
     }
 
+    function startSky() {
+      if (REDUCED || running || !visible || document.hidden) return;
+      running = true;
+      last = performance.now();
+      rafId = requestAnimationFrame(frame);
+    }
+
+    function stopSky() {
+      running = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+
     if (!MOBILE && !REDUCED) {
       window.addEventListener("mousemove", function (e) {
         target.x = e.clientX / Math.max(1, window.innerWidth);
         target.y = e.clientY / Math.max(1, window.innerHeight);
+        var r = canvas.getBoundingClientRect();
+        var nx = e.clientX - r.left, ny = e.clientY - r.top;
+        var now = performance.now();
+        if (cursor.lastAt) {
+          var eventStep = Math.max(8, Math.min(40, now - cursor.lastAt));
+          cursor.vx = cursor.vx * 0.45 + (nx - cursor.lastX) * (16.667 / eventStep) * 0.55;
+          cursor.vy = cursor.vy * 0.45 + (ny - cursor.lastY) * (16.667 / eventStep) * 0.55;
+          var cursorSpeed = Math.sqrt(cursor.vx * cursor.vx + cursor.vy * cursor.vy);
+          if (cursorSpeed > 34) { cursor.vx *= 34 / cursorSpeed; cursor.vy *= 34 / cursorSpeed; }
+        }
+        cursor.tx = nx; cursor.ty = ny; cursor.lastX = nx; cursor.lastY = ny; cursor.lastAt = now; cursor.active = true;
       }, { passive: true });
       window.addEventListener("mouseleave", function () {
         target.x = 0.5;
         target.y = 0.5;
+        cursor.tx = W * 0.5; cursor.ty = H * 0.5; cursor.active = false;
       }, { passive: true });
     }
 
     var visIO = new IntersectionObserver(function (entries) {
       visible = entries[0].isIntersecting;
+      if (visible) startSky(); else stopSky();
     }, { threshold: 0 });
     visIO.observe(canvas);
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) stopSky(); else if (visible) startSky();
+    });
     window.addEventListener("resize", resize, { passive: true });
     window.addEventListener("scroll", function () {
       window.requestAnimationFrame(updateSafeZone);
     }, { passive: true });
 
     resize();
-    if (!REDUCED) requestAnimationFrame(frame);
+    startSky();
   }
 
   /* ---------------- Noise → Stillness ---------------- */
@@ -488,12 +575,12 @@
       var t = now;
       var p = progress();
 
-      var shouldOn = p > 0.52;
+      var shouldOn = p > 0.12;
       if (shouldOn !== copyOn) { copyOn = shouldOn; if (copy) copy.classList.toggle("on", copyOn); }
 
       ctx.clearRect(0, 0, W, H);
-      var density = p < 0.5 ? p * 2 : (1 - p) * 2;
-      var slow = 1 - p * 0.75;
+      var density = Math.pow(1 - p, 0.82);
+      var slow = 0.28 + (1 - p) * 0.72;
       frags.forEach(function (f, i) {
         if (i / frags.length > density * 1.15) return;
         var drift = REDUCED ? 0 : t * 0.00002 * f.sp * slow;
@@ -534,8 +621,10 @@
     var visualA = section.querySelector(".sw-visual-a");
     var visualB = section.querySelector(".sw-visual-b");
     var visualC = section.querySelector(".sw-visual-c");
+    var visualD = section.querySelector(".sw-visual-d");
     var finalCopy = section.querySelector(".sw-final");
-    if (!intro || !visualA || !visualB || !visualC || !finalCopy) return;
+    var lightTraces = section.querySelectorAll(".sw-light-trace");
+    if (!intro || !visualA || !visualB || !visualC || !visualD || !finalCopy) return;
 
     var visible = false;
     new IntersectionObserver(function (entries) {
@@ -565,7 +654,7 @@
     function setVisual(el, x, y, scale, opacity, blur, rotate) {
       el.style.opacity = opacity.toFixed(3);
       el.style.transform = "translate(-50%, -50%) translate(" + x.toFixed(2) + "vw, " + y.toFixed(2) + "vh) rotate(" + rotate.toFixed(3) + "deg) scale(" + scale.toFixed(4) + ")";
-      el.style.filter = blur > 0.02 ? "blur(" + blur.toFixed(2) + "px) saturate(0.78) brightness(1.18)" : "saturate(0.78) brightness(1.18)";
+      el.style.filter = blur > 0.02 ? "blur(" + blur.toFixed(2) + "px) saturate(0.72) brightness(0.80)" : "saturate(0.72) brightness(0.80)";
       el.style.visibility = opacity <= 0.002 ? "hidden" : "visible";
     }
 
@@ -587,55 +676,65 @@
       var px = drift.x * 6;
       var py = drift.y * 4;
 
-      var introOut = ease(seg(p, 0.08, 0.22));
+      var introOut = ease(seg(p, 0.10, 0.20));
       intro.style.opacity = (1 - introOut).toFixed(3);
       intro.style.transform = "translateY(" + (-34 * introOut).toFixed(2) + "px) scale(" + (1 - introOut * 0.02).toFixed(4) + ")";
       intro.style.filter = "blur(" + (introOut * 5).toFixed(2) + "px)";
       intro.style.visibility = introOut >= 0.995 ? "hidden" : "visible";
 
-      var atmosphereIn = ease(seg(p, 0.10, 0.28));
-      var atmosphereOut = ease(seg(p, 0.90, 1.0));
+      var atmosphereIn = ease(seg(p, 0.08, 0.24));
+      var atmosphereOut = ease(seg(p, 0.91, 1.0));
       space.style.opacity = (0.45 + atmosphereIn * 0.55 - atmosphereOut * 0.42).toFixed(3);
       dust.style.opacity = ((0.35 + atmosphereIn * 0.65) * (1 - atmosphereOut)).toFixed(3);
       dust.style.transform = "translate(" + (-px * 0.65).toFixed(2) + "px," + (-py * 0.65).toFixed(2) + "px)";
 
-      var aIn = easeOut(seg(p, 0.16, 0.34));
-      var aOut = ease(seg(p, 0.52, 0.72));
+      /* Shot 1 — Arrival: a wide horizon enters from the left. */
+      var aIn = easeOut(seg(p, 0.14, 0.27));
+      var aOut = ease(seg(p, MOBILE ? 0.34 : 0.38, MOBILE ? 0.43 : 0.49));
       var aOpacity = aIn * (1 - aOut);
-      var aX = -76 + aIn * 64 - aOut * 22 + px * 0.55;
+      var aX = -78 + aIn * 66 - aOut * 18 + px * 0.55;
       var aY = 5 - aOut * 3 + py * 0.35;
       setVisual(visualA, aX, aY, 1 + aIn * 0.03, aOpacity, (1 - aIn) * 2.2 + aOut * 2.6, -0.35);
 
-      var bIn = easeOut(seg(p, 0.30, 0.50));
-      var bSettle = ease(seg(p, 0.58, 0.72));
-      var bExpand = ease(seg(p, 0.70, 0.86));
-      var bOut = ease(seg(p, 0.92, 1.0));
+      /* Shot 2 — Crossing: moonlit atmosphere travels in opposition. */
+      var bIn = easeOut(seg(p, 0.29, 0.42));
+      var bSettle = ease(seg(p, 0.40, 0.49));
+      var bOut = ease(seg(p, MOBILE ? 0.50 : 0.54, MOBILE ? 0.58 : 0.64));
       var bOpacity = bIn * (1 - bOut);
-      var bX = 72 - bIn * 62 - bSettle * 10 + px * 0.28;
+      var bX = 74 - bIn * 63 - bSettle * 8 + px * 0.28;
       var bY = -4 + bSettle * 3 + py * 0.22;
-      var bScale = 0.92 + bIn * 0.10 + bExpand * (SMALL ? 0.48 : MOBILE ? 0.38 : 0.46);
-      setVisual(visualB, bX, bY, bScale, bOpacity, (1 - bIn) * 2 + (1 - bExpand) * 0.4, 0.28);
+      var bScale = 0.92 + bIn * 0.11 + bSettle * 0.08;
+      setVisual(visualB, bX, bY, bScale, bOpacity, (1 - bIn) * 2 + (1 - bSettle) * 0.4, 0.28);
 
-      var cIn = easeOut(seg(p, 0.45, 0.64));
-      var cOut = ease(seg(p, 0.72, 0.88));
-      var cOpacity = cIn * (1 - cOut) * (MOBILE ? 0.78 : 1);
-      var cX = -58 + cIn * 50 - cOut * 18 + px * 0.16;
-      var cY = 10 - cIn * 3 + py * 0.12;
-      setVisual(visualC, cX, cY, 0.72 + cIn * 0.18, cOpacity, 1.8 - cIn * 0.8 + cOut * 2.2, -0.18);
+      /* Shot 3 — Place / Sound: the silver trace appears inside a deeper field. */
+      var cIn = easeOut(seg(p, 0.46, 0.58));
+      var cGrow = ease(seg(p, 0.54, 0.65));
+      var cOut = ease(seg(p, MOBILE ? 0.65 : 0.68, MOBILE ? 0.73 : 0.77));
+      var cOpacity = cIn * (1 - cOut);
+      var cX = -62 + cIn * 55 - cOut * 14 + px * 0.16;
+      var cY = 8 - cIn * 4 + py * 0.12;
+      setVisual(visualC, cX, cY, 0.78 + cIn * 0.16 + cGrow * 0.13, cOpacity, 1.8 - cIn * 1.2 + cOut * 2.2, -0.18);
 
-      var traces = section.querySelectorAll(".sw-trace");
-      for (var i = 0; i < traces.length; i++) {
-        var shift = (seg(p, 0.18 + i * 0.1, 0.88) - 0.5) * (MOBILE ? 22 : 46);
-        traces[i].style.transform = "translateX(" + shift.toFixed(2) + "px)";
-        traces[i].style.opacity = (0.22 + 0.28 * Math.sin(p * Math.PI)).toFixed(3);
+      /* Shot 4 — Immersion: one visual takes over the viewport, then recedes. */
+      var dIn = easeOut(seg(p, 0.68, 0.78));
+      var dFill = ease(seg(p, 0.74, 0.86));
+      var dOut = ease(seg(p, 0.91, 0.975));
+      var dOpacity = dIn * (1 - dOut);
+      var dScale = 0.72 + dIn * 0.18 + dFill * (MOBILE ? 0.18 : 0.22) - dOut * 0.08;
+      setVisual(visualD, px * 0.08, py * 0.08, dScale, dOpacity, (1 - dIn) * 2.4 + dOut * 2.8, 0.08);
+
+      for (var i = 0; i < lightTraces.length; i++) {
+        var traceIn = ease(seg(p, 0.50 + i * 0.18, 0.64 + i * 0.16));
+        var shift = (traceIn - 0.5) * (MOBILE ? 24 : 58);
+        lightTraces[i].style.transform = "translateX(" + shift.toFixed(2) + "px) rotate(-2deg) skewX(-12deg)";
+        lightTraces[i].style.opacity = (0.12 + traceIn * 0.48).toFixed(3);
       }
 
-      var finalIn = ease(seg(p, 0.82, 0.92));
-      var finalOut = ease(seg(p, 0.96, 1.0));
-      finalCopy.style.opacity = (finalIn * (1 - finalOut)).toFixed(3);
-      finalCopy.style.transform = "translateY(" + ((1 - finalIn) * 22 - finalOut * 12).toFixed(2) + "px)";
+      var finalIn = ease(seg(p, 0.92, 0.975));
+      finalCopy.style.opacity = finalIn.toFixed(3);
+      finalCopy.style.transform = "translateY(" + ((1 - finalIn) * 22).toFixed(2) + "px)";
       finalCopy.style.filter = "blur(" + ((1 - finalIn) * 4).toFixed(2) + "px)";
-      finalCopy.style.visibility = finalIn <= 0.002 || finalOut >= 0.995 ? "hidden" : "visible";
+      finalCopy.style.visibility = finalIn <= 0.002 ? "hidden" : "visible";
     }
 
     if (REDUCED) return;
